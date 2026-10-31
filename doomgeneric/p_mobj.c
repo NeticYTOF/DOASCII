@@ -731,6 +731,42 @@ void P_SpawnPlayer (mapthing_t* mthing)
 }
 
 
+static void P_SpawnExtraMapMonsters(mobj_t *original, const mapthing_t *spawnpoint)
+{
+    static const int offsets[][2] = {
+        { 64, 0 }, { -64, 0 }, { 0, 64 }, { 0, -64 },
+        { 64, 64 }, { -64, 64 }, { 64, -64 }, { -64, -64 },
+        { 96, 0 }, { -96, 0 }, { 0, 96 }, { 0, -96 },
+        { 96, 96 }, { -96, 96 }, { 96, -96 }, { -96, -96 }
+    };
+    int i;
+    int spawned = 0;
+
+    if (!(original->flags & MF_COUNTKILL))
+        return;
+
+    for (i = 0; i < (int)(sizeof(offsets) / sizeof(offsets[0])) && spawned < 2; i++)
+    {
+        fixed_t x = original->x + offsets[i][0] * FRACUNIT;
+        fixed_t y = original->y + offsets[i][1] * FRACUNIT;
+        mobj_t *copy;
+
+        if (!P_CheckPosition(original, x, y))
+            continue;
+
+        copy = P_SpawnMobj(x, y, original->z, original->type);
+        copy->spawnpoint = *spawnpoint;
+        copy->angle = original->angle;
+        if (original->flags & MF_AMBUSH)
+            copy->flags |= MF_AMBUSH;
+        if (copy->tics > 0)
+            copy->tics = 1 + (P_Random() % copy->tics);
+        if (copy->flags & MF_COUNTKILL)
+            totalkills++;
+        spawned++;
+    }
+}
+
 //
 // P_SpawnMapThing
 // The fields of the mapthing should
@@ -833,6 +869,8 @@ void P_SpawnMapThing (mapthing_t* mthing)
     mobj->angle = ANG45 * (mthing->angle/45);
     if (mthing->options & MTF_AMBUSH)
 	mobj->flags |= MF_AMBUSH;
+
+    P_SpawnExtraMapMonsters(mobj, mthing);
 }
 
 

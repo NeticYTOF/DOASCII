@@ -25,6 +25,8 @@
 
 #include "deh_main.h"
 #include "doomdef.h"
+#include "d_items.h"
+#include "p_local.h"
 
 #include "i_swap.h"
 #include "i_system.h"
@@ -32,6 +34,7 @@
 #include "w_wad.h"
 
 #include "r_local.h"
+#include "doom_observation.h"
 
 #include "doomstat.h"
 
@@ -282,6 +285,71 @@ vissprite_t	vissprites[MAXVISSPRITES];
 vissprite_t*	vissprite_p;
 int		newvissprite;
 
+static doascii_enemy_rect_t doascii_visible_enemies[DOASCII_MAX_VISIBLE_ENEMIES];
+static int doascii_visible_enemy_count;
+static int doascii_capture_enemy;
+static int doascii_enemy_min_x;
+static int doascii_enemy_min_y;
+static int doascii_enemy_max_x;
+static int doascii_enemy_max_y;
+
+int DG_CopyVisibleEnemies(doascii_enemy_rect_t *output, int capacity)
+{
+    int count = doascii_visible_enemy_count < capacity
+        ? doascii_visible_enemy_count : capacity;
+    int i;
+    for (i = 0; i < count; i++)
+        output[i] = doascii_visible_enemies[i];
+    return count;
+}
+
+static uint8_t DG_MoveClearance(mobj_t *player, angle_t direction)
+{
+    const uint8_t steps = 3;
+    uint8_t step;
+    int saved_flags = player->flags;
+    unsigned int fine_angle = direction >> ANGLETOFINESHIFT;
+
+    player->flags &= ~MF_PICKUP;
+    for (step = 1; step <= steps; step++)
+    {
+        fixed_t distance = (fixed_t)step * 16 * FRACUNIT;
+        fixed_t x = player->x + FixedMul(distance, finecosine[fine_angle]);
+        fixed_t y = player->y + FixedMul(distance, finesine[fine_angle]);
+        if (!P_CheckPosition(player, x, y))
+        {
+            player->flags = saved_flags;
+            return step - 1;
+        }
+    }
+    player->flags = saved_flags;
+    return steps;
+}
+
+void DG_CopyPlayerStatus(doascii_player_status_t *output)
+{
+    player_t *player = &players[consoleplayer];
+    int weapon = (int)player->readyweapon;
+    output->player_state = (int)player->playerstate;
+    output->health = player->mo ? player->mo->health : player->health;
+    output->armor = player->armorpoints;
+    output->weapon = weapon;
+    output->ammo = -1;
+    output->world_x = player->mo ? player->mo->x : 0;
+    output->world_y = player->mo ? player->mo->y : 0;
+    output->angle = player->mo ? (uint32_t)player->mo->angle : 0;
+    output->game_tic = (uint32_t)gametic;
+    output->forward_clearance = player->mo ? DG_MoveClearance(player->mo, player->mo->angle) : 0;
+    output->left_clearance = player->mo ? DG_MoveClearance(player->mo, player->mo->angle + ANG45) : 0;
+    output->right_clearance = player->mo ? DG_MoveClearance(player->mo, player->mo->angle - ANG45) : 0;
+    output->back_clearance = player->mo ? DG_MoveClearance(player->mo, player->mo->angle + ANG180) : 0;
+    output->total_kills = totalkills;
+    if (weapon >= 0 && weapon < NUMWEAPONS) {
+        int ammo_type = weaponinfo[weapon].ammo;
+        if (ammo_type >= 0 && ammo_type < NUMAMMO)
+            output->ammo = player->ammo[ammo_type];
+    }
+}
 
 
 //
@@ -309,6 +377,7 @@ void R_InitSprites (char** namelist)
 void R_ClearSprites (void)
 {
     vissprite_p = vissprites;
+    doascii_visible_enemy_count = 0;
 }
 
 
@@ -365,6 +434,13 @@ void R_DrawMaskedColumn (column_t* column)
 
 	if (dc_yl <= dc_yh)
 	{
+	    if (doascii_capture_enemy)
+	    {
+		if (dc_x < doascii_enemy_min_x) doascii_enemy_min_x = dc_x;
+		if (dc_x > doascii_enemy_max_x) doascii_enemy_max_x = dc_x;
+		if (dc_yl < doascii_enemy_min_y) doascii_enemy_min_y = dc_yl;
+		if (dc_yh > doascii_enemy_max_y) doascii_enemy_max_y = dc_yh;
+	    }
 	    dc_source = (byte *)column + 3;
 	    dc_texturemid = basetexturemid - (column->topdelta<<FRACBITS);
 	    // dc_source = (byte *)column + 3 - column->topdelta;
@@ -541,6 +617,7 @@ void R_ProjectSprite (mobj_t* thing)
     // store information in a vissprite
     vis = R_NewVisSprite ();
     vis->mobjflags = thing->flags;
+    vis->doascii_enemy = (thing->flags & MF_COUNTKILL) && thing->health > 0;
     vis->scale = xscale<<detailshift;
     vis->gx = thing->x;
     vis->gy = thing->y;
@@ -939,7 +1016,22 @@ void R_DrawSprite (vissprite_t* spr)
 		
     mfloorclip = clipbot;
     mceilingclip = cliptop;
+    doascii_capture_enemy = spr->doascii_enemy;
+    doascii_enemy_min_x = SCREENWIDTH;
+    doascii_enemy_min_y = SCREENHEIGHT;
+    doascii_enemy_max_x = -1;
+    doascii_enemy_max_y = -1;
     R_DrawVisSprite (spr, spr->x1, spr->x2);
+    doascii_capture_enemy = false;
+    if (spr->doascii_enemy && doascii_enemy_max_x >= doascii_enemy_min_x
+        && doascii_visible_enemy_count < DOASCII_MAX_VISIBLE_ENEMIES)
+    {
+        doascii_enemy_rect_t *rect = &doascii_visible_enemies[doascii_visible_enemy_count++];
+        rect->x = doascii_enemy_min_x;
+        rect->y = doascii_enemy_min_y;
+        rect->width = doascii_enemy_max_x - doascii_enemy_min_x + 1;
+        rect->height = doascii_enemy_max_y - doascii_enemy_min_y + 1;
+    }
 }
 
 
