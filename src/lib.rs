@@ -3,8 +3,7 @@ use std::io::{self, Read};
 pub const FRAME_WIDTH: usize = 640;
 pub const FRAME_HEIGHT: usize = 400;
 const FRAME_MAGIC: &[u8; 4] = b"DGF1";
-const ASCII_RAMP: &[u8] =
-    b" .'`^\"\\,:;Il!i~+_-?][}{1)(|/*tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$@";
+const ASCII_RAMP: &[u8] = b" .:-=+*#%@";
 const MAX_FRAME_PIXELS: usize = 16_777_216;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
