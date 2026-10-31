@@ -213,7 +213,7 @@ fn run_terminal_game() -> Result<(), Box<dyn std::error::Error>> {
                     stdout,
                     ResetColor,
                     cursor::MoveTo(0, size.1.saturating_sub(1)),
-                    Print("W/S move  A/D strafe  ←/→ turn  Space fire  E use  Q quit")
+                    Print(controls_for_width(size.0))
                 )?;
                 stdout.flush()?;
             }
@@ -288,6 +288,16 @@ fn to_doom_key(code: KeyCode) -> Option<u8> {
         KeyCode::Backspace => Some(127),
         KeyCode::Esc => Some(27),
         _ => None,
+    }
+}
+
+fn controls_for_width(columns: u16) -> &'static str {
+    match columns {
+        64.. => "W/S move  A/D strafe  Left/Right turn  Space fire  E use  Q quit",
+        57.. => "W/S move  A/D strafe  Left/Right turn  Space fire  Q quit",
+        40.. => "W/S move  A/D strafe  Space fire  Q quit",
+        17.. => "WASD move  Q quit",
+        _ => "Q",
     }
 }
 

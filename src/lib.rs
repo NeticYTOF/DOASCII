@@ -3,7 +3,7 @@ use std::io::{self, Read};
 pub const FRAME_WIDTH: usize = 640;
 pub const FRAME_HEIGHT: usize = 400;
 const FRAME_MAGIC: &[u8; 4] = b"DGF1";
-const ASCII_RAMP: &[u8] = b" .:-=+#@";
+const ASCII_RAMP: &[u8] = b" .-=+#@";
 const MAX_FRAME_PIXELS: usize = 16_777_216;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,10 +116,39 @@ impl Frame {
             .collect()
     }
 
+    fn contrast_bounds(&self) -> (f32, f32) {
+        if self.pixels.is_empty() {
+            return (0.0, 255.0);
+        }
+        let mut histogram = [0_u64; 256];
+        for pixel in &self.pixels {
+            histogram[luminance(
+                ((pixel >> 16) & 0xff) as u32,
+                ((pixel >> 8) & 0xff) as u32,
+                (pixel & 0xff) as u32,
+            ) as usize] += 1;
+        }
+        let percentile = |percent: u64| {
+            let target = (self.pixels.len() as u64 * percent).div_ceil(100);
+            let mut accumulated = 0_u64;
+            histogram
+                .iter()
+                .position(|count| {
+                    accumulated += count;
+                    accumulated >= target
+                })
+                .unwrap_or(0) as f32
+        };
+        let black = percentile(3);
+        let white = percentile(98).max(black);
+        (black, white)
+    }
+
     pub fn to_ascii_cells(&self, columns: usize, rows: usize) -> Vec<Vec<AsciiCell>> {
         if columns == 0 || rows == 0 || self.pixels.len() != self.width * self.height {
             return Vec::new();
         }
+        let contrast = self.contrast_bounds();
         let mut lines = Vec::with_capacity(rows);
         for row in 0..rows {
             let y0 = row * self.height / rows;
@@ -143,8 +172,7 @@ impl Frame {
                         let red = ((pixel >> 16) & 0xff) as u32;
                         let green = ((pixel >> 8) & 0xff) as u32;
                         let blue = (pixel & 0xff) as u32;
-                        let brightness =
-                            ((red * 2126 + green * 7152 + blue * 722) / 10_000) as usize;
+                        let brightness = luminance(red, green, blue) as usize;
                         histogram[brightness] += 1;
                         red_total += red as u64;
                         green_total += green as u64;
@@ -161,21 +189,47 @@ impl Frame {
                         accumulated > median_sample
                     })
                     .unwrap_or(0);
-                let brightness = ((median as f32 / 255.0).powf(0.72) * 255.0) as usize;
-                let shade = brightness * (ASCII_RAMP.len() - 1) / 255;
+                let brightness = enhance_luminance(median as f32, contrast);
+                let shade = (brightness * (ASCII_RAMP.len() - 1) as f32 / 255.0) as usize;
                 let samples = samples.max(1) as u64;
-                let lift = |channel: u64| {
-                    ((channel as f32 / samples as f32 / 255.0).powf(0.82) * 255.0) as u8
+                let average_red = red_total as f32 / samples as f32;
+                let average_green = green_total as f32 / samples as f32;
+                let average_blue = blue_total as f32 / samples as f32;
+                let average_luminance = luminance(
+                    average_red as u32,
+                    average_green as u32,
+                    average_blue as u32,
+                ) as f32;
+                let enhanced_luminance = enhance_luminance(average_luminance, contrast);
+                let color_scale = if average_luminance > 0.0 {
+                    enhanced_luminance / average_luminance
+                } else {
+                    0.0
                 };
+                let lift = |channel: f32| (channel * color_scale).clamp(0.0, 255.0) as u8;
                 line.push(AsciiCell {
                     character: ASCII_RAMP[shade] as char,
-                    color: (lift(red_total), lift(green_total), lift(blue_total)),
+                    color: (lift(average_red), lift(average_green), lift(average_blue)),
                 });
             }
             lines.push(line);
         }
         lines
     }
+}
+
+fn luminance(red: u32, green: u32, blue: u32) -> u32 {
+    (red * 2126 + green * 7152 + blue * 722) / 10_000
+}
+
+fn enhance_luminance(luminance: f32, (black, white): (f32, f32)) -> f32 {
+    let range = white - black;
+    let normalized = if range > 0.0 {
+        ((luminance - black) / range).clamp(0.0, 1.0)
+    } else {
+        luminance / 255.0
+    };
+    normalized.powf(0.82) * 255.0
 }
 
 fn find_magic(reader: &mut impl Read) -> io::Result<()> {
@@ -248,7 +302,7 @@ mod tests {
         assert_eq!(
             frame.to_ascii_cells(1, 1),
             [[AsciiCell {
-                character: ':',
+                character: '.',
                 color: (255, 0, 0),
             }]]
         );
@@ -262,6 +316,19 @@ mod tests {
             pixels: vec![0, 0, 0, 0, 0, 0, 0, 0x00ff_ffff],
         };
         assert_eq!(frame.to_ascii(1, 1), [" "]);
+    }
+
+    #[test]
+    fn frame_contrast_stretches_doom_dark_values() {
+        let frame = Frame {
+            width: 7,
+            height: 1,
+            pixels: [0, 20, 40, 80, 160, 200, 240]
+                .into_iter()
+                .map(|value| value * 0x010101)
+                .collect(),
+        };
+        assert_eq!(frame.to_ascii(7, 1)[0].chars().nth(4), Some('+'));
     }
 
     #[test]
