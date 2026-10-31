@@ -14,10 +14,10 @@ use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEventKind},
     execute, queue,
-    style::Print,
+    style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{self, Clear, ClearType},
 };
-use doascii::Frame;
+use doascii::{AsciiCell, Frame};
 
 const KEY_RIGHTARROW: u8 = 0xae;
 const KEY_LEFTARROW: u8 = 0xac;
@@ -144,7 +144,7 @@ fn run_terminal_game() -> Result<(), Box<dyn std::error::Error>> {
     thread::spawn(move || read_frames(child_stdout, frame_tx));
     let _terminal = TerminalSession::enter()?;
     let mut stdout = io::stdout();
-    let mut last_ascii = Vec::new();
+    let mut last_ascii: Vec<Vec<AsciiCell>> = Vec::new();
     let mut held: HashMap<KeyCode, (u8, Instant)> = HashMap::new();
     let mut terminal_size = terminal::size()?;
 
@@ -203,7 +203,7 @@ fn run_terminal_game() -> Result<(), Box<dyn std::error::Error>> {
                     last_ascii.clear();
                     queue!(stdout, Clear(ClearType::All))?;
                 }
-                let ascii = frame.to_ascii_fit(
+                let ascii = frame.to_ascii_cells_fit(
                     size.0.max(1) as usize,
                     size.1.saturating_sub(1).max(1) as usize,
                     _terminal.character_aspect(),
@@ -211,8 +211,9 @@ fn run_terminal_game() -> Result<(), Box<dyn std::error::Error>> {
                 draw_changed(&mut stdout, &ascii, &mut last_ascii)?;
                 queue!(
                     stdout,
+                    ResetColor,
                     cursor::MoveTo(0, size.1.saturating_sub(1)),
-                    Print("WASD move  arrows look  Space fire  E use  Q quit")
+                    Print("W/S move  A/D strafe  ←/→ turn  Space fire  E use  Q quit")
                 )?;
                 stdout.flush()?;
             }
@@ -292,29 +293,40 @@ fn to_doom_key(code: KeyCode) -> Option<u8> {
 
 fn draw_changed(
     stdout: &mut io::Stdout,
-    lines: &[String],
-    previous: &mut Vec<String>,
+    lines: &[Vec<AsciiCell>],
+    previous: &mut Vec<Vec<AsciiCell>>,
 ) -> io::Result<()> {
     if previous.len() != lines.len()
-        || previous.first().map(String::len) != lines.first().map(String::len)
+        || previous.first().map(Vec::len) != lines.first().map(Vec::len)
     {
-        queue!(stdout, Clear(ClearType::All))?;
+        queue!(stdout, Clear(ClearType::All), ResetColor)?;
         previous.clear();
-        previous.resize(lines.len(), String::new());
+        previous.resize_with(lines.len(), Vec::new);
     }
-    for (row, (line, old_line)) in lines.iter().zip(previous.iter_mut()).enumerate() {
-        let current: Vec<char> = line.chars().collect();
-        let old: Vec<char> = old_line.chars().collect();
-        for (column, character) in current.iter().enumerate() {
-            if old.get(column) != Some(character) {
+    for (row, line) in lines.iter().enumerate() {
+        let old_line = &previous[row];
+        let mut last_color = None;
+        for (column, cell) in line.iter().enumerate() {
+            if old_line.get(column) != Some(cell) {
+                if last_color != Some(cell.color) {
+                    queue!(
+                        stdout,
+                        SetForegroundColor(Color::Rgb {
+                            r: cell.color.0,
+                            g: cell.color.1,
+                            b: cell.color.2,
+                        })
+                    )?;
+                    last_color = Some(cell.color);
+                }
                 queue!(
                     stdout,
                     cursor::MoveTo(column as u16, row as u16),
-                    Print(character)
+                    Print(cell.character)
                 )?;
             }
         }
-        *old_line = line.clone();
+        previous[row] = line.clone();
     }
     Ok(())
 }

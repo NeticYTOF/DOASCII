@@ -6,6 +6,12 @@ const FRAME_MAGIC: &[u8; 4] = b"DGF1";
 const ASCII_RAMP: &[u8] = b" .:-=+#@";
 const MAX_FRAME_PIXELS: usize = 16_777_216;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AsciiCell {
+    pub character: char,
+    pub color: (u8, u8, u8),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
     pub width: usize,
@@ -53,6 +59,18 @@ impl Frame {
         max_rows: usize,
         character_aspect: f32,
     ) -> Vec<String> {
+        self.to_ascii_cells_fit(max_columns, max_rows, character_aspect)
+            .into_iter()
+            .map(|line| line.into_iter().map(|cell| cell.character).collect())
+            .collect()
+    }
+
+    pub fn to_ascii_cells_fit(
+        &self,
+        max_columns: usize,
+        max_rows: usize,
+        character_aspect: f32,
+    ) -> Vec<Vec<AsciiCell>> {
         if max_columns == 0
             || max_rows == 0
             || !character_aspect.is_finite()
@@ -76,24 +94,29 @@ impl Frame {
         };
         let content_columns = content_columns.clamp(1, max_columns);
         let content_rows = content_rows.clamp(1, max_rows);
-        let rendered = self.to_ascii(content_columns, content_rows);
+        let rendered = self.to_ascii_cells(content_columns, content_rows);
         let left = (max_columns - content_columns) / 2;
         let top = (max_rows - content_rows) / 2;
-        let blank = " ".repeat(max_columns);
-        let mut lines = vec![blank.clone(); max_rows];
+        let blank = AsciiCell {
+            character: ' ',
+            color: (0, 0, 0),
+        };
+        let mut canvas = vec![vec![blank; max_columns]; max_rows];
         for (index, line) in rendered.into_iter().enumerate() {
             let row = top + index;
-            lines[row] = format!(
-                "{}{}{}",
-                " ".repeat(left),
-                line,
-                " ".repeat(max_columns - left - content_columns)
-            );
+            canvas[row][left..left + content_columns].copy_from_slice(&line);
         }
-        lines
+        canvas
     }
 
     pub fn to_ascii(&self, columns: usize, rows: usize) -> Vec<String> {
+        self.to_ascii_cells(columns, rows)
+            .into_iter()
+            .map(|line| line.into_iter().map(|cell| cell.character).collect())
+            .collect()
+    }
+
+    pub fn to_ascii_cells(&self, columns: usize, rows: usize) -> Vec<Vec<AsciiCell>> {
         if columns == 0 || rows == 0 || self.pixels.len() != self.width * self.height {
             return Vec::new();
         }
@@ -103,7 +126,7 @@ impl Frame {
             let y1 = ((row + 1) * self.height / rows)
                 .max(y0 + 1)
                 .min(self.height);
-            let mut line = String::with_capacity(columns);
+            let mut line = Vec::with_capacity(columns);
             for col in 0..columns {
                 let x0 = col * self.width / columns;
                 let x1 = ((col + 1) * self.width / columns)
@@ -111,6 +134,9 @@ impl Frame {
                     .min(self.width);
                 let mut histogram = [0_u32; 256];
                 let mut samples = 0_u32;
+                let mut red_total = 0_u64;
+                let mut green_total = 0_u64;
+                let mut blue_total = 0_u64;
                 for y in y0..y1 {
                     for x in x0..x1 {
                         let pixel = self.pixels[y * self.width + x];
@@ -120,6 +146,9 @@ impl Frame {
                         let brightness =
                             ((red * 2126 + green * 7152 + blue * 722) / 10_000) as usize;
                         histogram[brightness] += 1;
+                        red_total += red as u64;
+                        green_total += green as u64;
+                        blue_total += blue as u64;
                         samples += 1;
                     }
                 }
@@ -134,7 +163,14 @@ impl Frame {
                     .unwrap_or(0);
                 let brightness = ((median as f32 / 255.0).powf(0.72) * 255.0) as usize;
                 let shade = brightness * (ASCII_RAMP.len() - 1) / 255;
-                line.push(ASCII_RAMP[shade] as char);
+                let samples = samples.max(1) as u64;
+                let lift = |channel: u64| {
+                    ((channel as f32 / samples as f32 / 255.0).powf(0.82) * 255.0) as u8
+                };
+                line.push(AsciiCell {
+                    character: ASCII_RAMP[shade] as char,
+                    color: (lift(red_total), lift(green_total), lift(blue_total)),
+                });
             }
             lines.push(line);
         }
@@ -200,6 +236,22 @@ mod tests {
         let content_rows = lines.iter().filter(|line| line.contains('@')).count();
         assert_eq!(content_rows, 31);
         assert!(lines.first().unwrap().trim().is_empty());
+    }
+
+    #[test]
+    fn ascii_cells_keep_the_source_palette_color() {
+        let frame = Frame {
+            width: 1,
+            height: 1,
+            pixels: vec![0x00ff_0000],
+        };
+        assert_eq!(
+            frame.to_ascii_cells(1, 1),
+            [[AsciiCell {
+                character: ':',
+                color: (255, 0, 0),
+            }]]
+        );
     }
 
     #[test]
