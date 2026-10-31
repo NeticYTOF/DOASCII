@@ -47,6 +47,52 @@ impl Frame {
         })
     }
 
+    pub fn to_ascii_fit(
+        &self,
+        max_columns: usize,
+        max_rows: usize,
+        character_aspect: f32,
+    ) -> Vec<String> {
+        if max_columns == 0
+            || max_rows == 0
+            || !character_aspect.is_finite()
+            || character_aspect <= 0.0
+        {
+            return Vec::new();
+        }
+        let image_aspect = self.width as f32 / self.height.max(1) as f32;
+        let target_columns_per_row = image_aspect / character_aspect;
+        let canvas_aspect = max_columns as f32 / max_rows as f32;
+        let (content_columns, content_rows) = if canvas_aspect > target_columns_per_row {
+            (
+                (max_rows as f32 * target_columns_per_row).round() as usize,
+                max_rows,
+            )
+        } else {
+            (
+                max_columns,
+                (max_columns as f32 / target_columns_per_row).round() as usize,
+            )
+        };
+        let content_columns = content_columns.clamp(1, max_columns);
+        let content_rows = content_rows.clamp(1, max_rows);
+        let rendered = self.to_ascii(content_columns, content_rows);
+        let left = (max_columns - content_columns) / 2;
+        let top = (max_rows - content_rows) / 2;
+        let blank = " ".repeat(max_columns);
+        let mut lines = vec![blank.clone(); max_rows];
+        for (index, line) in rendered.into_iter().enumerate() {
+            let row = top + index;
+            lines[row] = format!(
+                "{}{}{}",
+                " ".repeat(left),
+                line,
+                " ".repeat(max_columns - left - content_columns)
+            );
+        }
+        lines
+    }
+
     pub fn to_ascii(&self, columns: usize, rows: usize) -> Vec<String> {
         if columns == 0 || rows == 0 || self.pixels.len() != self.width * self.height {
             return Vec::new();
@@ -128,6 +174,21 @@ mod tests {
             pixels: vec![0, 0x00ff_ffff],
         };
         assert_eq!(frame.to_ascii(2, 1), [" @"]);
+    }
+
+    #[test]
+    fn aspect_fit_centers_full_frame_without_cropping() {
+        let frame = Frame {
+            width: 16,
+            height: 10,
+            pixels: vec![0x00ff_ffff; 160],
+        };
+        let lines = frame.to_ascii_fit(100, 100, 0.5);
+        assert_eq!(lines.len(), 100);
+        assert!(lines.iter().all(|line| line.len() == 100));
+        let content_rows = lines.iter().filter(|line| line.contains('@')).count();
+        assert_eq!(content_rows, 31);
+        assert!(lines.first().unwrap().trim().is_empty());
     }
 
     #[test]

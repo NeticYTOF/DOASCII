@@ -203,9 +203,10 @@ fn run_terminal_game() -> Result<(), Box<dyn std::error::Error>> {
                     last_ascii.clear();
                     queue!(stdout, Clear(ClearType::All))?;
                 }
-                let ascii = frame.to_ascii(
+                let ascii = frame.to_ascii_fit(
                     size.0.max(1) as usize,
                     size.1.saturating_sub(1).max(1) as usize,
+                    _terminal.character_aspect(),
                 );
                 draw_changed(&mut stdout, &ascii, &mut last_ascii)?;
                 queue!(
@@ -321,9 +322,14 @@ fn draw_changed(
 struct TerminalSession {
     #[cfg(windows)]
     _font: windows_console_font::FontGuard,
+    character_aspect: f32,
 }
 
 impl TerminalSession {
+    fn character_aspect(&self) -> f32 {
+        self.character_aspect
+    }
+
     fn enter() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
         if let Err(error) = execute!(
@@ -339,8 +345,12 @@ impl TerminalSession {
         let font = windows_console_font::FontGuard::shrink();
         #[cfg(windows)]
         let target_size = font.target_grid();
+        #[cfg(windows)]
+        let character_aspect = font.character_aspect();
         #[cfg(not(windows))]
         let target_size = (160, 45);
+        #[cfg(not(windows))]
+        let character_aspect = 0.5;
         let _ = execute!(
             io::stdout(),
             terminal::SetSize(target_size.0, target_size.1)
@@ -348,6 +358,7 @@ impl TerminalSession {
         Ok(Self {
             #[cfg(windows)]
             _font: font,
+            character_aspect,
         })
     }
 }
@@ -445,6 +456,10 @@ mod windows_console_font {
                 (1280 / self.cell_width as u32).min(u16::MAX as u32) as u16,
                 (720 / self.cell_height as u32).min(u16::MAX as u32) as u16,
             )
+        }
+
+        pub fn character_aspect(&self) -> f32 {
+            self.cell_width as f32 / self.cell_height as f32
         }
     }
 
