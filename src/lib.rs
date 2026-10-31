@@ -3,7 +3,7 @@ use std::io::{self, Read};
 pub const FRAME_WIDTH: usize = 640;
 pub const FRAME_HEIGHT: usize = 400;
 const FRAME_MAGIC: &[u8; 4] = b"DGF1";
-const ASCII_RAMP: &[u8] = b" .:-=+*#%@";
+const ASCII_RAMP: &[u8] = b" .:-=+#@";
 const MAX_FRAME_PIXELS: usize = 16_777_216;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,19 +109,30 @@ impl Frame {
                 let x1 = ((col + 1) * self.width / columns)
                     .max(x0 + 1)
                     .min(self.width);
-                let mut light = 0_u64;
-                let mut samples = 0_u64;
+                let mut histogram = [0_u32; 256];
+                let mut samples = 0_u32;
                 for y in y0..y1 {
                     for x in x0..x1 {
                         let pixel = self.pixels[y * self.width + x];
-                        let red = ((pixel >> 16) & 0xff) as u64;
-                        let green = ((pixel >> 8) & 0xff) as u64;
-                        let blue = (pixel & 0xff) as u64;
-                        light += (red * 2126 + green * 7152 + blue * 722) / 10_000;
+                        let red = ((pixel >> 16) & 0xff) as u32;
+                        let green = ((pixel >> 8) & 0xff) as u32;
+                        let blue = (pixel & 0xff) as u32;
+                        let brightness =
+                            ((red * 2126 + green * 7152 + blue * 722) / 10_000) as usize;
+                        histogram[brightness] += 1;
                         samples += 1;
                     }
                 }
-                let brightness = (light / samples.max(1)) as usize;
+                let median_sample = samples / 2;
+                let mut accumulated = 0_u32;
+                let median = histogram
+                    .iter()
+                    .position(|count| {
+                        accumulated += count;
+                        accumulated > median_sample
+                    })
+                    .unwrap_or(0);
+                let brightness = ((median as f32 / 255.0).powf(0.72) * 255.0) as usize;
                 let shade = brightness * (ASCII_RAMP.len() - 1) / 255;
                 line.push(ASCII_RAMP[shade] as char);
             }
@@ -189,6 +200,26 @@ mod tests {
         let content_rows = lines.iter().filter(|line| line.contains('@')).count();
         assert_eq!(content_rows, 31);
         assert!(lines.first().unwrap().trim().is_empty());
+    }
+
+    #[test]
+    fn median_sampling_ignores_isolated_bright_pixels() {
+        let frame = Frame {
+            width: 8,
+            height: 1,
+            pixels: vec![0, 0, 0, 0, 0, 0, 0, 0x00ff_ffff],
+        };
+        assert_eq!(frame.to_ascii(1, 1), [" "]);
+    }
+
+    #[test]
+    fn midtones_use_a_brightened_ascii_ramp() {
+        let frame = Frame {
+            width: 1,
+            height: 1,
+            pixels: vec![0x0080_8080],
+        };
+        assert_eq!(frame.to_ascii(1, 1), ["="]);
     }
 
     #[test]
