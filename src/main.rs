@@ -205,21 +205,13 @@ fn run_terminal_game() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 let ascii = frame.to_ascii(
                     size.0.max(1) as usize,
-                    size.1.saturating_sub(2).max(1) as usize,
+                    size.1.saturating_sub(1).max(1) as usize,
                 );
                 draw_changed(&mut stdout, &ascii, &mut last_ascii)?;
                 queue!(
                     stdout,
-                    cursor::MoveTo(0, size.1.saturating_sub(2)),
-                    Print("W/S move  A/D strafe  arrows turn  Space fire  E use  Q quit")
-                )?;
-                queue!(
-                    stdout,
                     cursor::MoveTo(0, size.1.saturating_sub(1)),
-                    Print(format!(
-                        "Doom {}x{}  |  ASCII {}x{}",
-                        frame.width, frame.height, size.0, size.1
-                    ))
+                    Print("WASD move  arrows look  Space fire  E use  Q quit")
                 )?;
                 stdout.flush()?;
             }
@@ -345,7 +337,14 @@ impl TerminalSession {
         }
         #[cfg(windows)]
         let font = windows_console_font::FontGuard::shrink();
-        let _ = execute!(io::stdout(), terminal::SetSize(240, 80));
+        #[cfg(windows)]
+        let target_size = font.target_grid();
+        #[cfg(not(windows))]
+        let target_size = (160, 45);
+        let _ = execute!(
+            io::stdout(),
+            terminal::SetSize(target_size.0, target_size.1)
+        );
         Ok(Self {
             #[cfg(windows)]
             _font: font,
@@ -401,6 +400,8 @@ mod windows_console_font {
     pub struct FontGuard {
         output: *mut c_void,
         original: Option<ConsoleFontInfoEx>,
+        cell_width: u16,
+        cell_height: u16,
     }
 
     impl FontGuard {
@@ -417,18 +418,33 @@ mod windows_console_font {
             let valid = !output.is_null() && output as isize != -1;
             if valid && unsafe { GetCurrentConsoleFontEx(output, 0, &mut current) != 0 } {
                 let original = current;
-                current.font_size = Coord { x: 6, y: 8 };
+                let old_width = current.font_size.x.max(1) as u16;
+                let old_height = current.font_size.y.max(1) as u16;
+                current.font_size = Coord { x: 4, y: 6 };
                 let changed = unsafe { SetCurrentConsoleFontEx(output, 0, &current) != 0 };
                 Self {
                     output,
                     original: changed.then_some(original),
+                    cell_width: if changed { 4 } else { old_width },
+                    cell_height: if changed { 6 } else { old_height },
                 }
             } else {
                 Self {
                     output,
                     original: None,
+                    cell_width: 8,
+                    cell_height: 16,
                 }
             }
+        }
+    }
+
+    impl FontGuard {
+        pub fn target_grid(&self) -> (u16, u16) {
+            (
+                (1280 / self.cell_width as u32).min(u16::MAX as u32) as u16,
+                (720 / self.cell_height as u32).min(u16::MAX as u32) as u16,
+            )
         }
     }
 
