@@ -1,0 +1,2 @@
+# Vey 2.0.0 API snapshot, pinned for reproducible adapter compatibility.
+vey @ git+https://github.com/fazin-ahamed/vey.git@e6b046ffbd138cbdbfb2f89c6ae77525fe6b0b18

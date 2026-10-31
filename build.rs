@@ -42,6 +42,7 @@ fn main() {
     }
     build.file(manifest.join("native/doomgeneric_headless.c"));
     println!("cargo:rerun-if-changed=native/doomgeneric_headless.c");
+    println!("cargo:rerun-if-changed=native/doom_observation.h");
     println!("cargo:rerun-if-changed=vendor/doomgeneric/doomgeneric/Makefile.win");
 
     // Prefer the standalone LLVM install on this workstation; cc-rs falls back

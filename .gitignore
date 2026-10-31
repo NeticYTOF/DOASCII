@@ -1,3 +1,7 @@
 /target/
+/.vey-venv/
+/.doascii/
+__pycache__/
+*.py[cod]
 /assets/freedoom-0.13.0.zip
 /assets/freedoom/
